@@ -266,3 +266,30 @@ def get_file_info(request):
     finally:
         sock.close()
 
+@csrf_exempt
+@require_http_methods(["POST"])
+def cleanup_all(request):
+    """Limpia todos los archivos, bloques y nodos del sistema"""
+    coordinator_host = request.GET.get('coordinator_host', None)
+    sock = get_coordinator_connection(coordinator_host)
+    if not sock:
+        return JsonResponse({"error": f"No se pudo conectar al coordinador en {coordinator_host or COORDINATOR_HOST}"}, status=500)
+    
+    try:
+        print("[WEB] Solicitando limpieza completa del sistema...")
+        send_message(sock, MessageType.CLEANUP_ALL, {})
+        response = receive_message(sock)
+        
+        if response and response.get("type") == MessageType.SUCCESS.value:
+            return JsonResponse({
+                "success": True,
+                "message": "Sistema limpiado exitosamente",
+                "details": response.get("data", {})
+            })
+        else:
+            error_msg = response.get("data", {}).get("message", "Error desconocido") if response else "Sin respuesta del coordinador"
+            return JsonResponse({"error": error_msg}, status=500)
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+    finally:
+        sock.close()

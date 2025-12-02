@@ -14,7 +14,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import (
     COORDINATOR_HOST, COORDINATOR_PORT, SHARED_DIRECTORY,
-    MIN_SHARED_SPACE, MAX_SHARED_SPACE, HEARTBEAT_INTERVAL, BLOCK_SIZE
+    MIN_SHARED_SPACE, MAX_SHARED_SPACE, HEARTBEAT_INTERVAL, BLOCK_SIZE, USER_SHARED_DIRECTORY
 )
 from common.protocol import MessageType, receive_message, send_message
 from node.storage import BlockStorage
@@ -24,12 +24,24 @@ class Node:
     """Nodo del sistema distribuido"""
     
     def __init__(self, node_id: Optional[str] = None, shared_space_size: Optional[int] = None, coordinator_host: Optional[str] = None):
-        self.node_id = node_id or f"node_{uuid.uuid4().hex[:8]}"
-        self.shared_space_size = shared_space_size or MIN_SHARED_SPACE
+        # Si no se proporciona node_id, buscar en el directorio compartido del usuario
+        if node_id is None:
+            node_id = self._find_or_create_node_id()
+        
+        self.node_id = node_id
+        
+        # Validar tamaño del espacio compartido
+        if shared_space_size:
+            if shared_space_size < MIN_SHARED_SPACE or shared_space_size > MAX_SHARED_SPACE:
+                raise ValueError(f"El espacio compartido debe estar entre {MIN_SHARED_SPACE//(1024*1024)} y {MAX_SHARED_SPACE//(1024*1024)} MB")
+            self.shared_space_size = shared_space_size
+        else:
+            self.shared_space_size = MIN_SHARED_SPACE
+        
         self.coordinator_host = coordinator_host or COORDINATOR_HOST
         
-        # Crear directorio de espacio compartido
-        self.shared_space_path = os.path.join(os.getcwd(), self.node_id, SHARED_DIRECTORY)
+        # Usar directorio compartido del usuario
+        self.shared_space_path = os.path.join(USER_SHARED_DIRECTORY, self.node_id, SHARED_DIRECTORY)
         ensure_directory(self.shared_space_path)
         
         # Almacenamiento de bloques
@@ -46,6 +58,32 @@ class Node:
         # Socket para recibir conexiones del coordinador
         self.listener_socket: Optional[socket.socket] = None
         self.listener_port = 0
+    
+    def _find_or_create_node_id(self) -> str:
+        """
+        Busca una carpeta de nodo existente en el directorio compartido del usuario.
+        Si existe, retorna el ID. Si no, genera uno nuevo.
+        """
+        ensure_directory(USER_SHARED_DIRECTORY)
+        
+        # Buscar carpetas existentes
+        try:
+            if os.path.exists(USER_SHARED_DIRECTORY):
+                subdirs = [d for d in os.listdir(USER_SHARED_DIRECTORY) 
+                          if os.path.isdir(os.path.join(USER_SHARED_DIRECTORY, d))]
+                
+                # Si hay carpetas, usar la primera (asumiendo que es un nodo registrado)
+                if subdirs:
+                    found_id = subdirs[0]
+                    print(f"[*] Nodo encontrado: {found_id}")
+                    return found_id
+        except Exception as e:
+            print(f"[!] Error al buscar nodos existentes: {e}")
+        
+        # Si no hay nodos, generar uno nuevo
+        new_node_id = f"node_{uuid.uuid4().hex[:8]}"
+        print(f"[*] Nuevo nodo creado: {new_node_id}")
+        return new_node_id
     
     def start(self):
         """Inicia el nodo"""
@@ -204,6 +242,7 @@ class Node:
         file_id = data.get("file_id")
         block_number = data.get("block_number")
         
+        # Intentar obtener el bloque (puede ser original o réplica)
         block_data = self.storage.retrieve_block(block_id)
         
         if block_data:
@@ -219,11 +258,26 @@ class Node:
             })
     
     def handle_delete_block(self, client_socket: socket.socket, data: dict):
-        """Elimina un bloque"""
+        """Elimina un bloque (puede ser original o réplica)"""
         block_id = data.get("block_id")
         file_id = data.get("file_id")
         
+        # Eliminar tanto el original como la réplica si existen
+        deleted = False
+        
+        # Intentar eliminar bloque original
         if self.storage.delete_block(block_id):
+            deleted = True
+        
+        # Intentar eliminar réplica (si existe con sufijo _replica)
+        # Buscar en los metadatos
+        stored_blocks = self.storage.get_stored_blocks()
+        for stored_id, info in stored_blocks.items():
+            if stored_id == block_id or (block_id in stored_id and file_id == info.get("file_id")):
+                if self.storage.delete_block(stored_id):
+                    deleted = True
+        
+        if deleted:
             send_message(client_socket, MessageType.BLOCK_DELETED, {
                 "block_id": block_id,
                 "file_id": file_id,

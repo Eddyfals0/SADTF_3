@@ -74,6 +74,12 @@
                 <i class="fa-solid fa-arrows-rotate"></i>
                 <span class="hidden sm:inline">Actualizar</span>
             </button>
+
+            <!-- Botón de Limpieza -->
+            <button id="btnCleanup" onclick="cleanupAll()" class="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded-lg font-semibold transition-all shadow-lg border border-red-500 shrink-0" title="Limpiar todo el sistema (cuidado: es permanente)">
+                <i class="fa-solid fa-trash-can"></i>
+                <span class="hidden sm:inline">Limpiar</span>
+            </button>
         </div>
     </header>
 
@@ -409,32 +415,47 @@
             }
 
             const blocks = blockTableData.blocks;
-            const totalBlocks = blockTableData.total_blocks || blocks.length;
+            
+            // Ordenar bloques por ID (nodo1001, nodo1002, nodo2001, etc.)
+            const sortedBlocks = blocks.sort((a, b) => {
+                // Extraer número del nodo y número de bloque
+                const getBlockNum = (blockId) => {
+                    const match = blockId.match(/nodo(\d+)(\d+)/);
+                    if (match) {
+                        return parseInt(match[1]) * 10000 + parseInt(match[2]);
+                    }
+                    return 0;
+                };
+                return getBlockNum(a.block_id) - getBlockNum(b.block_id);
+            });
 
             // Mostrar todos los bloques
-            for(let i = 0; i < totalBlocks && i < 200; i++) { // Limitar a 200 para rendimiento
+            sortedBlocks.forEach(block => {
                 const div = document.createElement('div');
                 div.className = 'memory-block';
-                div.title = `Bloque ID: ${i}`;
                 
-                const block = blocks[i];
-                if (block) {
-                    if (block.status === 'FREE') {
-                        div.classList.add('block-free');
-                        div.title += " (Libre)";
-                    } else if (block.status === 'REPLICATED') {
-                        div.classList.add('block-used');
-                        div.title += ` (Ocupado - ${block.file_id || 'N/A'})`;
-                    } else {
-                        div.classList.add('block-replica');
-                        div.title += " (Réplica)";
+                let title = `ID: ${block.block_id}`;
+                const primaryNode = block.primary_node_id || block.node_id || 'N/A';
+                title += `\nNodo Primario: ${primaryNode}`;
+                
+                if (block.status === 'FREE') {
+                    div.classList.add('block-free');
+                    title += "\nEstado: Libre";
+                } else if (block.status === 'REPLICATED' || block.status === 'USED') {
+                    div.classList.add('block-used');
+                    title += `\nEstado: Ocupado (Original)`;
+                    title += `\nArchivo: ${block.file_id || 'N/A'}`;
+                    if (block.replica_node_id) {
+                        title += `\nRéplica en: ${block.replica_node_id}`;
                     }
                 } else {
-                    div.classList.add('block-free');
-                    div.title += " (Libre)";
+                    div.classList.add('block-replica');
+                    title += "\nEstado: Réplica";
                 }
+                
+                div.title = title;
                 grid.appendChild(div);
-            }
+            });
         }
 
         // --- INTERACCIONES DE ARCHIVOS ---
@@ -598,6 +619,71 @@
             p.innerHTML = `<span class="text-slate-500">[${time}]</span> ${msg}`;
             consoleDiv.appendChild(p);
             consoleDiv.scrollTop = consoleDiv.scrollHeight;
+        }
+
+        // Función para limpiar todo el sistema
+        async function cleanupAll() {
+            // Confirmar operación
+            const confirmed = confirm(
+                '⚠️  ADVERTENCIA: Esto eliminará TODOS los archivos y bloques del sistema.\n\n' +
+                'Esta operación es PERMANENTE y no se puede deshacer.\n\n' +
+                '¿Está seguro de que desea continuar?'
+            );
+
+            if (!confirmed) {
+                log('[LIMPIEZA] Operación cancelada por el usuario');
+                return;
+            }
+
+            // Segunda confirmación
+            const doubleConfirm = confirm('¿Realmente está seguro? Escriba SÍ si desea continuar.\n(Solo puede hacer clic en OK para confirmar)');
+            if (!doubleConfirm) {
+                log('[LIMPIEZA] Operación cancelada');
+                return;
+            }
+
+            log('[LIMPIEZA] Iniciando limpieza completa del sistema...');
+            const btnCleanup = document.getElementById('btnCleanup');
+            btnCleanup.disabled = true;
+            btnCleanup.classList.add('opacity-50', 'cursor-not-allowed');
+
+            try {
+                const coordinatorHost = getCoordinatorHost();
+                log(`[LIMPIEZA] Conectando al coordinador en ${coordinatorHost}...`);
+                
+                const response = await fetch(`/api/cleanup/?coordinator_host=${encodeURIComponent(coordinatorHost)}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    }
+                });
+
+                const data = await response.json();
+
+                if (response.ok && data.success) {
+                    log('[✓ LIMPIEZA] Sistema limpiado exitosamente');
+                    log(`[✓ LIMPIEZA] Archivos eliminados: ${data.details.files_deleted}`);
+                    log(`[✓ LIMPIEZA] Nodos desconectados: ${data.details.nodes_disconnected}`);
+                    log('[✓ LIMPIEZA] Tabla de bloques limpiada');
+                    log('[✓ LIMPIEZA] Sistema listo para comenzar de cero');
+                    
+                    // Esperar 2 segundos y refrescar la interfaz
+                    setTimeout(() => {
+                        log('[LIMPIEZA] Refrescando interfaz...');
+                        refreshAll();
+                    }, 2000);
+                } else {
+                    const errorMsg = data.error || 'Error desconocido';
+                    log(`[✗ LIMPIEZA] Error: ${errorMsg}`);
+                    alert('Error durante la limpieza: ' + errorMsg);
+                }
+            } catch (error) {
+                log(`[✗ LIMPIEZA] Error de conexión: ${error.message}`);
+                alert('Error al conectar con el coordinador: ' + error.message);
+            } finally {
+                btnCleanup.disabled = false;
+                btnCleanup.classList.remove('opacity-50', 'cursor-not-allowed');
+            }
         }
 
         // Iniciar

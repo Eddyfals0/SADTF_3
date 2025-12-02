@@ -54,13 +54,15 @@ class BlockStorage:
         """Verifica si se puede almacenar un bloque"""
         return self.get_available_space() >= block_size
     
-    def store_block(self, block_id: int, file_id: str, block_number: int, 
+    def store_block(self, block_id: str, file_id: str, block_number: int, 
                    block_data: bytes, is_replica: bool = False) -> bool:
         """Almacena un bloque"""
         if not self.can_store_block(len(block_data)):
             return False
         
-        block_filename = f"block_{block_id}_{file_id}_{block_number}.dat"
+        # Usar el block_id directamente (formato: nodo1001, nodo1002, etc.)
+        replica_suffix = "_replica" if is_replica else ""
+        block_filename = f"{block_id}_{file_id}_{block_number}{replica_suffix}.dat"
         block_path = os.path.join(self.shared_space_path, block_filename)
         
         try:
@@ -68,7 +70,7 @@ class BlockStorage:
                 f.write(block_data)
             
             # Guardar metadatos
-            self.blocks[str(block_id)] = {
+            self.blocks[block_id] = {
                 "block_id": block_id,
                 "file_id": file_id,
                 "block_number": block_number,
@@ -83,9 +85,9 @@ class BlockStorage:
             print(f"Error almacenando bloque {block_id}: {e}")
             return False
     
-    def retrieve_block(self, block_id: int) -> Optional[bytes]:
+    def retrieve_block(self, block_id: str) -> Optional[bytes]:
         """Recupera un bloque"""
-        block_info = self.blocks.get(str(block_id))
+        block_info = self.blocks.get(block_id)
         if not block_info:
             return None
         
@@ -100,9 +102,9 @@ class BlockStorage:
             print(f"Error recuperando bloque {block_id}: {e}")
             return None
     
-    def delete_block(self, block_id: int) -> bool:
+    def delete_block(self, block_id: str) -> bool:
         """Elimina un bloque"""
-        block_info = self.blocks.get(str(block_id))
+        block_info = self.blocks.get(block_id)
         if not block_info:
             return False
         
@@ -111,7 +113,7 @@ class BlockStorage:
         try:
             if os.path.exists(block_path):
                 os.remove(block_path)
-            del self.blocks[str(block_id)]
+            del self.blocks[block_id]
             self.save_metadata()
             return True
         except Exception as e:

@@ -30,6 +30,7 @@ class MessageType(Enum):
     GET_FILE_INFO = "GET_FILE_INFO"
     GET_BLOCK_TABLE = "GET_BLOCK_TABLE"
     GET_ACTIVE_NODES = "GET_ACTIVE_NODES"
+    CLEANUP_ALL = "CLEANUP_ALL"
     
     # Mensajes del coordinador al cliente
     UPLOAD_RESPONSE = "UPLOAD_RESPONSE"

@@ -238,6 +238,8 @@ class Coordinator:
                     self.handle_download_file(client_socket, data)
                 elif msg_type == MessageType.DELETE_FILE:
                     self.handle_delete_file(client_socket, data)
+                elif msg_type == MessageType.CLEANUP_ALL:
+                    self.handle_cleanup_all(client_socket, data)
                 elif msg_type == MessageType.LIST_FILES:
                     self.handle_list_files(client_socket)
                 elif msg_type == MessageType.GET_FILE_INFO:
@@ -303,19 +305,21 @@ class Coordinator:
             # Guardar estado
             self.save_state()
             
-            # Reconstruir tabla de bloques
-            total_blocks = sum(node.shared_space_size // BLOCK_SIZE 
-                              for node in self.nodes.values() if node.is_alive())
+            # Reconstruir tabla de bloques con estructura de nodos
+            node_blocks = {}
+            for node_id, node_info in self.nodes.items():
+                if node_info.is_alive():
+                    num_blocks = node_info.shared_space_size // BLOCK_SIZE
+                    node_blocks[node_id] = num_blocks
             
-            if total_blocks > 0:
+            if node_blocks:
                 if self.block_table is None:
-                    self.block_table = BlockTable(total_blocks)
+                    self.block_table = BlockTable(node_blocks)
                 else:
-                    # Extender tabla si es necesario
-                    current_total = self.block_table.total_blocks
-                    if total_blocks > current_total:
-                        # En producción, se necesitaría una mejor estrategia
-                        self.block_table = BlockTable(total_blocks)
+                    # Actualizar tabla con nuevos nodos
+                    self.block_table.update_node_blocks(node_blocks)
+            
+            total_blocks = sum(node_blocks.values()) if node_blocks else 0
             
             print(f"Nodo {node_id} registrado desde {address}:{port} con {shared_space_size} bytes")
             
@@ -356,6 +360,7 @@ class Coordinator:
             })
             return
         
+        # Validar tamaño del archivo (no hay límite específico, pero validar que quepa)
         # Calcular número de bloques necesarios
         num_blocks = (file_size + BLOCK_SIZE - 1) // BLOCK_SIZE
         
@@ -370,11 +375,20 @@ class Coordinator:
             })
             return
         
+        # Verificar que hay suficientes bloques libres
+        if self.block_table:
+            free_blocks = self.block_table.get_free_blocks_count()
+            if free_blocks < num_blocks:
+                send_message(client_socket, MessageType.ERROR, {
+                    "message": f"No hay suficientes bloques libres. Necesarios: {num_blocks}, Disponibles: {free_blocks}"
+                })
+                return
+        
         # Generar ID único para el archivo
         file_id = f"{filename}_{int(time.time())}"
         
         try:
-            # Asignar bloques
+            # Asignar bloques (retorna lista de (block_id, primary_node_id, replica_node_id))
             allocated = self.block_table.allocate_blocks(file_id, num_blocks, active_nodes)
             
             # Guardar información del archivo
@@ -469,9 +483,9 @@ class Coordinator:
             block_retrieved = False
             
             # Intentar obtener del nodo principal primero
-            node_id = block_entry.node_id
-            if node_id in self.nodes and self.nodes[node_id].is_alive():
-                node_info = self.nodes[node_id]
+            primary_node_id = getattr(block_entry, 'primary_node_id', None) or getattr(block_entry, 'node_id', None)
+            if primary_node_id and primary_node_id in self.nodes and self.nodes[primary_node_id].is_alive():
+                node_info = self.nodes[primary_node_id]
                 try:
                     # Conectar al puerto listener del nodo
                     node_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -491,7 +505,7 @@ class Coordinator:
                         blocks_data[block_num] = response.get("data", {}).get("block_data")
                         block_retrieved = True
                 except Exception as e:
-                    print(f"Error obteniendo bloque {block_entry.block_id} del nodo {node_id}: {e}")
+                    print(f"Error obteniendo bloque {block_entry.block_id} del nodo {primary_node_id}: {e}")
             
             # Si falla, intentar con la réplica
             if not block_retrieved:
@@ -545,26 +559,44 @@ class Coordinator:
         # Liberar bloques
         self.block_table.free_blocks(file_id)
         
-        # Eliminar bloques de los nodos
+        # Eliminar bloques de los nodos (original y réplica)
         blocks_info = self.block_table.get_file_blocks(file_id)
         for block_entry in blocks_info:
-            for node_id in [block_entry.node_id, block_entry.replica_node_id]:
-                if node_id and node_id in self.nodes and self.nodes[node_id].is_alive():
-                    node_info = self.nodes[node_id]
-                    try:
-                        # Conectar al puerto listener del nodo
-                        node_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                        node_socket.settimeout(5)
-                        node_socket.connect((node_info.address, node_info.port))
-                        
-                        send_message(node_socket, MessageType.DELETE_BLOCK, {
-                            "block_id": block_entry.block_id,
-                            "file_id": file_id
-                        })
-                        
-                        node_socket.close()
-                    except Exception as e:
-                        print(f"Error eliminando bloque del nodo {node_id}: {e}")
+            # Eliminar del nodo primario
+            primary_node_id = block_entry.primary_node_id
+            if primary_node_id and primary_node_id in self.nodes and self.nodes[primary_node_id].is_alive():
+                node_info = self.nodes[primary_node_id]
+                try:
+                    node_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    node_socket.settimeout(5)
+                    node_socket.connect((node_info.address, node_info.port))
+                    
+                    send_message(node_socket, MessageType.DELETE_BLOCK, {
+                        "block_id": block_entry.block_id,
+                        "file_id": file_id
+                    })
+                    
+                    node_socket.close()
+                except Exception as e:
+                    print(f"Error eliminando bloque del nodo primario {primary_node_id}: {e}")
+            
+            # Eliminar de la réplica
+            replica_id = block_entry.replica_node_id
+            if replica_id and replica_id in self.nodes and self.nodes[replica_id].is_alive():
+                replica_info = self.nodes[replica_id]
+                try:
+                    node_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    node_socket.settimeout(5)
+                    node_socket.connect((replica_info.address, replica_info.port))
+                    
+                    send_message(node_socket, MessageType.DELETE_BLOCK, {
+                        "block_id": block_entry.block_id,
+                        "file_id": file_id
+                    })
+                    
+                    node_socket.close()
+                except Exception as e:
+                    print(f"Error eliminando bloque de réplica {replica_id}: {e}")
         
         # Eliminar archivo
         with self.files_lock:
@@ -601,7 +633,7 @@ class Coordinator:
         
         send_message(client_socket, MessageType.FILE_INFO, {
             "file": file_info.to_dict(),
-            "blocks": blocks_info
+                "blocks": blocks_info
         })
     
     def handle_get_block_table(self, client_socket: socket.socket):
@@ -644,6 +676,120 @@ def split_file_into_blocks_from_bytes(file_bytes: bytes, block_size: int):
         block_num += 1
         offset += block_size
     return blocks
+
+    def handle_cleanup_all(self, client_socket: socket.socket, data: dict):
+        """Limpia todos los archivos, bloques y nodos del sistema"""
+        print("[!] LIMPIEZA COMPLETA DEL SISTEMA SOLICITADA")
+        
+        try:
+            # 1. Obtener lista de todos los archivos
+            file_ids_to_delete = list(self.files.keys())
+            
+            # 2. Eliminar cada archivo (esto eliminará sus bloques)
+            for file_id in file_ids_to_delete:
+                try:
+                    if file_id in self.files:
+                        file_info = self.files[file_id]
+                        
+                        # Liberar bloques
+                        if self.block_table:
+                            self.block_table.free_blocks(file_id)
+                        
+                        # Obtener bloques del archivo
+                        if self.block_table:
+                            blocks_info = self.block_table.get_file_blocks(file_id)
+                            
+                            # Eliminar bloques de los nodos
+                            for block_entry in blocks_info:
+                                # Eliminar del nodo primario
+                                primary_node_id = block_entry.primary_node_id
+                                if primary_node_id and primary_node_id in self.nodes:
+                                    node_info = self.nodes[primary_node_id]
+                                    if node_info.is_alive():
+                                        try:
+                                            node_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                                            node_socket.settimeout(3)
+                                            node_socket.connect((node_info.address, node_info.port))
+                                            
+                                            send_message(node_socket, MessageType.DELETE_BLOCK, {
+                                                "block_id": block_entry.block_id,
+                                                "file_id": file_id
+                                            })
+                                            
+                                            node_socket.close()
+                                        except Exception as e:
+                                            print(f"  [!] Error al eliminar bloque del nodo primario: {e}")
+                                
+                                # Eliminar de la réplica
+                                replica_id = block_entry.replica_node_id
+                                if replica_id and replica_id in self.nodes:
+                                    replica_info = self.nodes[replica_id]
+                                    if replica_info.is_alive():
+                                        try:
+                                            node_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                                            node_socket.settimeout(3)
+                                            node_socket.connect((replica_info.address, replica_info.port))
+                                            
+                                            send_message(node_socket, MessageType.DELETE_BLOCK, {
+                                                "block_id": block_entry.block_id,
+                                                "file_id": file_id
+                                            })
+                                            
+                                            node_socket.close()
+                                        except Exception as e:
+                                            print(f"  [!] Error al eliminar bloque de réplica: {e}")
+                        
+                        # Eliminar archivo del registro
+                        with self.files_lock:
+                            if file_id in self.files:
+                                del self.files[file_id]
+                        
+                        print(f"  [✓] Archivo eliminado: {file_id}")
+                
+                except Exception as e:
+                    print(f"  [!] Error eliminando archivo {file_id}: {e}")
+            
+            # 3. Desconectar y limpiar nodos
+            with self.node_lock:
+                node_ids = list(self.nodes.keys())
+                for node_id in node_ids:
+                    node_info = self.nodes[node_id]
+                    try:
+                        if node_info.socket:
+                            node_info.socket.close()
+                    except:
+                        pass
+                
+                self.nodes.clear()
+                self.node_registry.clear()
+                self.next_node_number = 1
+            
+            print("  [✓] Todos los nodos han sido desconectados")
+            
+            # 4. Limpiar tabla de bloques
+            if self.block_table:
+                self.block_table.blocks.clear()
+            
+            print("  [✓] Tabla de bloques limpiada")
+            
+            # 5. Guardar estado limpio
+            self.save_state()
+            print("  [✓] Estado guardado")
+            
+            # Responder al cliente
+            send_message(client_socket, MessageType.SUCCESS, {
+                "message": "Sistema limpiado exitosamente",
+                "files_deleted": len(file_ids_to_delete),
+                "nodes_disconnected": len(node_ids)
+            })
+            
+            print("[✓] LIMPIEZA COMPLETADA EXITOSAMENTE")
+            
+        except Exception as e:
+            print(f"[!] Error durante la limpieza: {e}")
+            send_message(client_socket, MessageType.ERROR, {
+                "message": f"Error durante la limpieza: {str(e)}"
+            })
 
 if __name__ == "__main__":
     coordinator = Coordinator()

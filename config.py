@@ -19,6 +19,10 @@ REPLICATION_FACTOR = 2  # Cada bloque tiene 2 copias (original + réplica)
 SHARED_DIRECTORY = "espacioCompartido"
 COORDINATOR_DATA_DIR = "coordinator_data"
 
+# Directorio compartido del usuario
+import os
+USER_SHARED_DIRECTORY = os.path.join(f"C:\\Users\\{os.getenv('USERNAME')}", "espacioCompartido")
+
 # Timeout para conexiones (segundos)
 CONNECTION_TIMEOUT = 5
 HEARTBEAT_INTERVAL = 10  # Intervalo de heartbeat en segundos
