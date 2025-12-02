@@ -1,8 +1,11 @@
-# No se requieren dependencias externas
-# El proyecto usa solo librerías estándar de Python:
+# Dependencias del proyecto
+
+# Django para interfaz web moderna
+Django>=4.2.0
+
+# Librerías estándar de Python (incluidas):
 # - socket (comunicación de red)
 # - threading (hilos)
-# - tkinter (interfaz gráfica - viene con Python)
 # - json (serialización)
 # - base64 (codificación)
 # - os, pathlib (sistema de archivos)
@@ -11,8 +14,6 @@
 # - dataclasses (estructuras de datos)
 # - enum (enumeraciones)
 
-# Si tkinter no está disponible, instalar:
-# Ubuntu/Debian: sudo apt-get install python3-tk
-# Windows: tkinter viene incluido con Python
-# macOS: tkinter viene incluido con Python
+# Para instalar:
+# pip install -r requirements.txt
 

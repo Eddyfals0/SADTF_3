@@ -23,9 +23,10 @@ from common.utils import ensure_directory
 class Node:
     """Nodo del sistema distribuido"""
     
-    def __init__(self, node_id: Optional[str] = None, shared_space_size: Optional[int] = None):
+    def __init__(self, node_id: Optional[str] = None, shared_space_size: Optional[int] = None, coordinator_host: Optional[str] = None):
         self.node_id = node_id or f"node_{uuid.uuid4().hex[:8]}"
         self.shared_space_size = shared_space_size or MIN_SHARED_SPACE
+        self.coordinator_host = coordinator_host or COORDINATOR_HOST
         
         # Crear directorio de espacio compartido
         self.shared_space_path = os.path.join(os.getcwd(), self.node_id, SHARED_DIRECTORY)
@@ -51,7 +52,7 @@ class Node:
         # Conectar con coordinador
         try:
             self.coordinator_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.coordinator_socket.connect((COORDINATOR_HOST, COORDINATOR_PORT))
+            self.coordinator_socket.connect((self.coordinator_host, COORDINATOR_PORT))
             
             # Iniciar socket listener para recibir comandos del coordinador
             self.listener_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -94,8 +95,9 @@ class Node:
         except:
             local_ip = "127.0.0.1"
         
+        # Enviar registro sin node_id (o con None) para que el coordinador lo asigne
         send_message(self.coordinator_socket, MessageType.NODE_REGISTER, {
-            "node_id": self.node_id,
+            "node_id": self.node_id if self.node_id and self.node_id.startswith("nodo") else None,
             "address": local_ip,
             "port": self.listener_port,
             "shared_space_size": self.shared_space_size
@@ -106,7 +108,14 @@ class Node:
         if response and response.get("type") == MessageType.REGISTER_RESPONSE.value:
             data = response.get("data", {})
             if data.get("success"):
-                print(f"Nodo registrado exitosamente. Total de bloques: {data.get('total_blocks', 0)}")
+                # Actualizar el node_id con el asignado por el coordinador
+                assigned_id = data.get("node_id")
+                if assigned_id:
+                    self.node_id = assigned_id
+                    print(f"Nodo registrado exitosamente como: {self.node_id}")
+                    print(f"Total de bloques en el sistema: {data.get('total_blocks', 0)}")
+                else:
+                    print(f"Nodo registrado exitosamente. Total de bloques: {data.get('total_blocks', 0)}")
             else:
                 print("Error registrando nodo")
     

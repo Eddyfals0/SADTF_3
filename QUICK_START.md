@@ -36,16 +36,23 @@ python start_node.py --node-id node2 --space 50MB
 python start_node.py --node-id node3 --space 100MB
 ```
 
-### 3. Iniciar el Cliente GUI
+### 3. Iniciar el Servidor Web
 
-**Terminal 5:**
+**Terminal 4:**
 ```bash
-python start_client.py
+python start_web.py
+```
+
+### 4. Abrir en el Navegador
+
+Abre tu navegador y ve a:
+```
+http://127.0.0.1:8000
 ```
 
 ## Verificación Rápida
 
-1. En el cliente GUI, verifica que aparezcan los nodos en el panel izquierdo
+1. En la interfaz web, verifica que aparezcan los nodos en el panel izquierdo
 2. Intenta subir un archivo pequeño (menos de 1 MB)
 3. Verifica que aparezca en la lista de archivos
 4. Descarga el archivo para verificar que funciona
@@ -74,9 +81,11 @@ Espacio compartido: 50.00 MB
 Puerto listener: 54322
 Nodo registrado exitosamente. Total de bloques: 120
 
-# Terminal 4 - Cliente GUI
-$ python start_client.py
-# Se abre la ventana de la GUI
+# Terminal 4 - Servidor Web
+$ python start_web.py
+# Servidor iniciado en http://127.0.0.1:8000
+
+# Abre tu navegador en http://127.0.0.1:8000
 ```
 
 ## Solución de Problemas Comunes
@@ -93,14 +102,16 @@ $ python start_client.py
 - El archivo es demasiado grande para el espacio disponible
 - Elimina archivos antiguos o añade más nodos
 
-### La GUI no muestra nodos
+### La interfaz web no muestra nodos
 - Presiona el botón "Actualizar" en el panel de nodos
-- Verifica la consola para ver mensajes de error
+- Verifica la consola en la parte inferior para ver mensajes de error
+- Verifica que el coordinador esté ejecutándose
 
 ## Comandos Útiles
 
 ### Ver espacio disponible
-- En la GUI, revisa el panel de "Nodos Activos"
+- En la interfaz web, revisa las tarjetas de estadísticas en la parte superior
+- El panel de "Nodos Activos" muestra los nodos disponibles
 - La tabla de bloques muestra bloques libres vs usados
 
 ### Verificar distribución de bloques

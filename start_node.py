@@ -25,10 +25,13 @@ def parse_size(size_str):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Iniciar un nodo del sistema distribuido')
-    parser.add_argument('--node-id', type=str, help='ID del nodo (opcional)')
     parser.add_argument('--space', type=str, 
                        help=f'Espacio compartido (ej: 50MB, 70MB). Rango: {MIN_SHARED_SPACE//(1024*1024)}-{MAX_SHARED_SPACE//(1024*1024)} MB',
-                       default=f"{MIN_SHARED_SPACE//(1024*1024)}MB")
+                       default=f"{MIN_SHARED_SPACE//(1024*1024)}MB",
+                       required=True)
+    parser.add_argument('--coordinator-host', type=str, 
+                       help='Dirección IP del coordinador (ej: 192.168.1.100). Por defecto: localhost',
+                       default=None)
     
     args = parser.parse_args()
     
@@ -45,12 +48,13 @@ if __name__ == "__main__":
     print("=" * 60)
     print("SISTEMA DE ARCHIVOS DISTRIBUIDO - NODO")
     print("=" * 60)
-    print(f"ID del Nodo: {args.node_id or 'Auto-generado'}")
+    print(f"ID del Nodo: Será asignado por el coordinador")
     print(f"Espacio Compartido: {space_size // (1024*1024)} MB")
+    print(f"Coordinador: {args.coordinator_host or 'localhost (por defecto)'}")
     print("Presione Ctrl+C para detener")
     print("=" * 60)
     
-    node = Node(args.node_id, space_size)
+    node = Node(None, space_size, args.coordinator_host)
     try:
         node.start()
     except KeyboardInterrupt:

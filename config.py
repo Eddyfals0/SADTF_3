@@ -24,6 +24,6 @@ CONNECTION_TIMEOUT = 5
 HEARTBEAT_INTERVAL = 10  # Intervalo de heartbeat en segundos
 NODE_TIMEOUT = 30  # Tiempo sin heartbeat antes de considerar nodo desconectado
 
-# Configuración de la interfaz
-GUI_UPDATE_INTERVAL = 1000  # ms
+# Configuración de la interfaz web
+WEB_UPDATE_INTERVAL = 5000  # ms (actualización automática en la web)
 

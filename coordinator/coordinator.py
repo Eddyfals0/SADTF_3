@@ -66,6 +66,10 @@ class Coordinator:
         self.nodes: Dict[str, NodeInfo] = {}
         self.node_lock = threading.Lock()
         
+        # Registro de nodos por dirección (para reasignar IDs)
+        self.node_registry: Dict[str, str] = {}  # address:port -> node_id
+        self.next_node_number = 1
+        
         # Tabla de bloques
         self.block_table: Optional[BlockTable] = None
         
@@ -92,6 +96,19 @@ class Coordinator:
                     # Cargar archivos
                     self.files = {fid: FileInfo(**data) 
                                  for fid, data in state.get("files", {}).items()}
+                    # Cargar registro de nodos
+                    self.node_registry = state.get("node_registry", {})
+                    # Calcular el siguiente número de nodo
+                    if self.node_registry:
+                        max_num = 0
+                        for node_id in self.node_registry.values():
+                            if node_id.startswith("nodo"):
+                                try:
+                                    num = int(node_id.replace("nodo", ""))
+                                    max_num = max(max_num, num)
+                                except:
+                                    pass
+                        self.next_node_number = max_num + 1
                     # La tabla de bloques se reconstruirá cuando los nodos se registren
             except Exception as e:
                 print(f"Error cargando estado: {e}")
@@ -103,7 +120,8 @@ class Coordinator:
             with open(state_file, 'w') as f:
                 state = {
                     "files": {fid: file_info.to_dict() 
-                             for fid, file_info in self.files.items()}
+                             for fid, file_info in self.files.items()},
+                    "node_registry": self.node_registry
                 }
                 json.dump(state, f, indent=2)
         except Exception as e:
@@ -236,43 +254,77 @@ class Coordinator:
     
     def handle_node_register(self, client_socket: socket.socket, data: dict):
         """Registra un nuevo nodo"""
-        node_id = data.get("node_id")
+        requested_node_id = data.get("node_id")  # Puede ser None o vacío
         address = data.get("address")
         port = data.get("port")
         shared_space_size = data.get("shared_space_size")
         
+        # Crear clave única para identificar el nodo por su dirección
+        node_key = f"{address}:{port}"
+        
+        # Determinar el ID del nodo
         with self.node_lock:
-            node_info = NodeInfo(
-                node_id=node_id,
-                address=address,
-                port=port,
-                shared_space_size=shared_space_size,
-                last_heartbeat=time.time(),
-                socket=client_socket
-            )
-            self.nodes[node_id] = node_info
-        
-        # Reconstruir tabla de bloques
-        total_blocks = sum(node.shared_space_size // BLOCK_SIZE 
-                          for node in self.nodes.values() if node.is_alive())
-        
-        if total_blocks > 0:
-            if self.block_table is None:
-                self.block_table = BlockTable(total_blocks)
+            # Si el nodo ya está registrado (reconexión), usar su ID anterior
+            if node_key in self.node_registry:
+                node_id = self.node_registry[node_key]
+                print(f"Nodo reconectado: {node_id} desde {address}:{port}")
+            # Si el nodo solicitó un ID específico y está disponible, usarlo
+            elif requested_node_id and requested_node_id not in self.nodes:
+                node_id = requested_node_id
+                self.node_registry[node_key] = node_id
+            # Si no, asignar un ID automático (nodo1, nodo2, etc.)
             else:
-                # Extender tabla si es necesario
-                current_total = self.block_table.total_blocks
-                if total_blocks > current_total:
-                    # En producción, se necesitaría una mejor estrategia
+                node_id = f"nodo{self.next_node_number}"
+                self.next_node_number += 1
+                self.node_registry[node_key] = node_id
+                print(f"Nuevo nodo asignado: {node_id}")
+            
+            # Si el nodo ya existe pero está desconectado, actualizar su información
+            if node_id in self.nodes:
+                old_node = self.nodes[node_id]
+                # Actualizar información del nodo
+                old_node.address = address
+                old_node.port = port
+                old_node.shared_space_size = shared_space_size
+                old_node.last_heartbeat = time.time()
+                old_node.socket = client_socket
+            else:
+                # Crear nuevo nodo
+                node_info = NodeInfo(
+                    node_id=node_id,
+                    address=address,
+                    port=port,
+                    shared_space_size=shared_space_size,
+                    last_heartbeat=time.time(),
+                    socket=client_socket
+                )
+                self.nodes[node_id] = node_info
+            
+            # Guardar estado
+            self.save_state()
+            
+            # Reconstruir tabla de bloques
+            total_blocks = sum(node.shared_space_size // BLOCK_SIZE 
+                              for node in self.nodes.values() if node.is_alive())
+            
+            if total_blocks > 0:
+                if self.block_table is None:
                     self.block_table = BlockTable(total_blocks)
-        
-        print(f"Nodo {node_id} registrado desde {address}:{port} con {shared_space_size} bytes")
-        
-        send_message(client_socket, MessageType.REGISTER_RESPONSE, {
-            "success": True,
-            "total_blocks": total_blocks,
-            "block_table": self.block_table.to_dict() if self.block_table else {}
-        })
+                else:
+                    # Extender tabla si es necesario
+                    current_total = self.block_table.total_blocks
+                    if total_blocks > current_total:
+                        # En producción, se necesitaría una mejor estrategia
+                        self.block_table = BlockTable(total_blocks)
+            
+            print(f"Nodo {node_id} registrado desde {address}:{port} con {shared_space_size} bytes")
+            
+            send_message(client_socket, MessageType.REGISTER_RESPONSE, {
+                "success": True,
+                "node_id": node_id,  # Enviar el ID asignado al nodo
+                "total_blocks": total_blocks,
+                "block_table": self.block_table.to_dict() if self.block_table else {}
+            })
         
         # Notificar a otros nodos
         self.notify_all_nodes({

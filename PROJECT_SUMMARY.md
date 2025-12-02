@@ -19,13 +19,16 @@
    - Se comunican con el coordinador mediante heartbeat
    - Escuchan comandos del coordinador en un puerto dedicado
 
-3. **Cliente GUI (`client/gui.py`)**
-   - Interfaz gráfica moderna y completa
+3. **Interfaz Web (`webapp/filesystem/`)**
+   - Interfaz web moderna con Django y Bootstrap 5
+   - Dashboard con estadísticas en tiempo real
    - Muestra nodos activos en tiempo real
    - Visualiza la tabla de bloques
-   - Permite subir, descargar, eliminar archivos
+   - Permite subir archivos con Drag & Drop
+   - Permite descargar, eliminar archivos
    - Muestra atributos detallados de archivos
    - Consola de eventos en tiempo real
+   - API REST para todas las operaciones
 
 ### Módulos Comunes
 
@@ -57,12 +60,15 @@
 - Notificación a todos los clientes de cambios
 - Reconstrucción de tabla de bloques al reconectar nodos
 
-### ✅ Interfaz Gráfica
-- Panel de nodos activos con estado en tiempo real
+### ✅ Interfaz Web
+- Dashboard con estadísticas en tiempo real
+- Panel de nodos activos con estado visual
 - Lista de archivos con información detallada
 - Tabla de bloques visualizable
-- Consola de eventos
-- Operaciones: subir, descargar, eliminar, ver atributos
+- Consola de eventos estilo terminal
+- Operaciones: subir (con Drag & Drop), descargar, eliminar, ver atributos
+- Diseño responsive y moderno
+- Actualización automática cada 5 segundos
 
 ### ✅ Persistencia
 - Metadatos guardados en archivos JSON
@@ -189,8 +195,12 @@ SADTF_3/
 ├── node/                 # Módulo nodos
 │   ├── node.py          # Nodo principal
 │   └── storage.py        # Almacenamiento
-├── client/               # Módulo cliente
-│   └── gui.py           # Interfaz gráfica
+├── webapp/               # Aplicación web Django
+│   ├── filesystem/      # App Django
+│   │   ├── views.py     # Vistas y API REST
+│   │   ├── urls.py      # URLs
+│   │   └── templates/   # Templates HTML
+│   └── sadft_web/       # Configuración Django
 ├── common/               # Módulos comunes
 │   ├── protocol.py      # Protocolo comunicación
 │   └── utils.py         # Utilidades
@@ -198,7 +208,7 @@ SADTF_3/
 ├── start_*.py           # Scripts de inicio
 ├── README.md            # Documentación completa
 ├── QUICK_START.md       # Guía rápida
-└── requirements.txt     # Dependencias (ninguna)
+└── requirements.txt     # Dependencias (Django)
 ```
 
 ## Conclusión
@@ -207,7 +217,7 @@ El sistema implementa exitosamente un sistema de archivos distribuido tolerante 
 - ✅ Distribución de archivos en bloques
 - ✅ Replicación para tolerancia a fallos
 - ✅ Tabla de bloques tipo paginación
-- ✅ Interfaz gráfica completa
+- ✅ Interfaz web moderna y completa
 - ✅ Monitoreo en tiempo real
 - ✅ Manejo de desconexiones
 - ✅ Operaciones CRUD completas

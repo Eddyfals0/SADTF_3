@@ -19,7 +19,7 @@ El sistema está compuesto por tres componentes principales:
 
 1. **Coordinador**: Servidor central que gestiona la tabla de bloques, coordina los nodos y maneja las solicitudes de los clientes
 2. **Nodos**: Computadoras que almacenan bloques de archivos en su directorio `espacioCompartido` (50-100 MB cada uno)
-3. **Cliente GUI**: Interfaz gráfica que permite a los usuarios interactuar con el sistema
+3. **Interfaz Web**: Interfaz web moderna con Django que permite a los usuarios interactuar con el sistema desde cualquier navegador
 
 ## Estructura del Proyecto
 
@@ -33,9 +33,12 @@ SADTF_3/
 │   ├── __init__.py
 │   ├── node.py          # Nodo del sistema distribuido
 │   └── storage.py       # Gestión de almacenamiento de bloques
-├── client/               # Módulo del cliente
-│   ├── __init__.py
-│   └── gui.py           # Interfaz gráfica del cliente
+├── webapp/               # Aplicación web Django
+│   ├── filesystem/      # App Django para el sistema de archivos
+│   │   ├── views.py     # Vistas y API REST
+│   │   ├── urls.py      # URLs de la aplicación
+│   │   └── templates/   # Templates HTML
+│   └── sadft_web/       # Configuración Django
 ├── common/               # Módulos comunes
 │   ├── __init__.py
 │   ├── protocol.py      # Protocolo de comunicación
@@ -43,25 +46,29 @@ SADTF_3/
 ├── config.py            # Configuración del sistema
 ├── start_coordinator.py # Script para iniciar el coordinador
 ├── start_node.py        # Script para iniciar un nodo
-├── start_client.py      # Script para iniciar el cliente GUI
-├── requirements.txt     # Dependencias (ninguna externa requerida)
+├── start_web.py         # Script para iniciar el servidor web Django
+├── requirements.txt     # Dependencias (Django)
 └── README.md           # Este archivo
 ```
 
 ## Requisitos
 
 - Python 3.7 o superior
-- tkinter (interfaz gráfica)
-  - Windows/macOS: Viene incluido con Python
-  - Linux: `sudo apt-get install python3-tk`
+- Django 4.2 o superior (para la interfaz web)
+- Navegador web moderno (Chrome, Firefox, Edge, Safari)
 
 ## Instalación
 
 1. Clonar o descargar el proyecto
-2. No se requieren dependencias externas (solo librerías estándar de Python)
-3. Si tkinter no está disponible en Linux, instalarlo:
+2. Instalar dependencias:
    ```bash
-   sudo apt-get install python3-tk
+   pip install -r requirements.txt
+   ```
+3. Configurar Django (solo primera vez):
+   ```bash
+   cd webapp
+   python manage.py migrate
+   cd ..
    ```
 
 ## Configuración
@@ -112,52 +119,65 @@ python start_node.py --node-id node3 --space 100MB
 - Si no especificas `--node-id`, se generará uno automáticamente
 - Si no especificas `--space`, se usará el mínimo (50 MB)
 
-### Paso 3: Iniciar el Cliente GUI
+### Paso 3: Iniciar el Servidor Web
 
 En otra terminal, ejecutar:
 
 ```bash
-python start_client.py
+python start_web.py
 ```
 
-Se abrirá la interfaz gráfica del cliente.
+O manualmente:
 
-## Uso de la Interfaz Gráfica
+```bash
+cd webapp
+python manage.py runserver
+```
 
-La interfaz gráfica está dividida en varias secciones:
+### Paso 4: Abrir en el Navegador
+
+Abre tu navegador y ve a:
+
+```
+http://127.0.0.1:8000
+```
+
+## Uso de la Interfaz Web
+
+La interfaz web está dividida en varias secciones:
+
+### Dashboard Superior
+- **Tarjetas de Estadísticas**: Muestra nodos activos, archivos almacenados, bloques totales y bloques libres
+- Actualización automática cada 5 segundos
 
 ### Panel Izquierdo: Nodos Activos
 - Muestra todos los nodos registrados en el sistema
-- Indica el espacio disponible de cada nodo
-- Muestra el estado (Activo/Inactivo) de cada nodo
-- Se actualiza automáticamente cada segundo
+- Indica el estado (Activo/Inactivo) con badges de colores
+- Botón **Actualizar** para refrescar manualmente
 
 ### Panel Central: Archivos
+- **Área de Carga**: Drag & Drop para subir archivos o clic para seleccionar
 - Lista todos los archivos almacenados en el sistema
 - Muestra nombre, tamaño, número de bloques y fecha de subida
+- Tabla interactiva con selección de archivos
 - Botones de operaciones:
-  - **Subir Archivo**: Selecciona y sube un archivo al sistema
+  - **Subir**: Sube el archivo seleccionado
   - **Descargar**: Descarga el archivo seleccionado
   - **Eliminar**: Elimina el archivo seleccionado
-  - **Ver Atributos**: Muestra información detallada del archivo y dónde están sus bloques
+  - **Atributos**: Muestra información detallada del archivo y dónde están sus bloques
   - **Actualizar**: Refresca la lista de archivos
 
 ### Panel Derecho: Tabla de Bloques
 - Muestra la tabla de bloques del sistema
 - Indica qué bloques están libres o en uso
 - Muestra en qué nodos están almacenados los bloques
-- Muestra información de réplicas
-- Botón **Actualizar Tabla** para refrescar la información
+- Botón **Actualizar** para refrescar la información
 
 ### Consola (Inferior)
 - Muestra eventos y mensajes del sistema en tiempo real
 - Incluye timestamps para cada mensaje
-- Útil para debugging y monitoreo
-
-### Barra de Estado
-- Indica el estado de conexión con el coordinador
-- Verde: Conectado
-- Rojo: Desconectado
+- Estilo terminal moderno
+- Scroll automático
 
 ## Operaciones del Sistema
 
