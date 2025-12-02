@@ -95,6 +95,20 @@ def cleanup_pycache():
             except Exception as e:
                 print(f"    ✗ Error al eliminar {pycache_path}: {e}")
 
+def cleanup_virtual_env():
+    """Limpia el entorno virtual (env)"""
+    print("[*] Limpiando entorno virtual...")
+    
+    env_dir = "env"
+    if os.path.exists(env_dir):
+        try:
+            shutil.rmtree(env_dir)
+            print(f"    ✓ Eliminado directorio: {env_dir}")
+        except Exception as e:
+            print(f"    ✗ Error al eliminar {env_dir}: {e}")
+    else:
+        print(f"    ℹ Directorio no existe: {env_dir}")
+
 def confirm_cleanup():
     """Solicita confirmación antes de ejecutar limpieza"""
     print("\n" + "="*70)
@@ -128,6 +142,7 @@ def main():
         cleanup_local_nodes()
         cleanup_user_shared_space()
         cleanup_pycache()
+        cleanup_virtual_env()
         
         print("\n" + "="*70)
         print("✓ LIMPIEZA COMPLETADA EXITOSAMENTE")

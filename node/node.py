@@ -40,8 +40,8 @@ class Node:
         
         self.coordinator_host = coordinator_host or COORDINATOR_HOST
         
-        # Usar directorio compartido del usuario
-        self.shared_space_path = os.path.join(USER_SHARED_DIRECTORY, self.node_id, SHARED_DIRECTORY)
+        # Usar directorio compartido del usuario - bloques se guardan directamente en node_[id]/
+        self.shared_space_path = os.path.join(USER_SHARED_DIRECTORY, self.node_id)
         ensure_directory(self.shared_space_path)
         
         # Almacenamiento de bloques

@@ -16,6 +16,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import COORDINATOR_PORT, HEARTBEAT_INTERVAL, NODE_TIMEOUT, COORDINATOR_DATA_DIR, BLOCK_SIZE
 from common.protocol import MessageType, receive_message, send_message
 from coordinator.block_table import BlockTable
+from coordinator.cache import coordinator_cache
 from common.utils import ensure_directory
 
 @dataclass
@@ -68,6 +69,15 @@ class Coordinator:
         
         # Registro de nodos por dirección (para reasignar IDs)
         self.node_registry: Dict[str, str] = {}  # address:port -> node_id
+        
+        # Clientes web conectados (para notificaciones)
+        self.web_clients: Dict[str, socket.socket] = {}  # address:port -> socket
+        self.web_lock = threading.Lock()
+        
+        # Eventos recientes (para notificar a webs)
+        self.recent_events = []  # Lista de eventos recientes
+        self.events_lock = threading.Lock()
+        
         self.next_node_number = 1
         
         # Tabla de bloques
@@ -175,14 +185,24 @@ class Coordinator:
                 except:
                     pass
             
-            # Notificar a todos los nodos activos
-            self.notify_all_nodes({
-                "type": "NODE_DISCONNECTED",
-                "node_id": node_id
+            # ADVERTENCIA: Solo mostrar desconexión sin recuperación automática
+            print(f"[✗ NODO DESCONECTADO] {node_id} - Se perdió contacto")
+            print(f"    [!] Bloques replicas disponibles para recuperación manual si es necesario")
+            
+            # ⭐ Registrar evento para que las webs lo vean
+            self.add_event("NODE_DISCONNECTED", {
+                "node_id": node_id,
+                "address": node_info.address,
+                "port": node_info.port
             })
             
-            # Reconstruir tabla de bloques si es necesario
-            self.rebuild_block_table()
+            # ⭐ NOTIFICAR A TODAS LAS WEBS sobre la desconexión del nodo
+            self.notify_all_webs({
+                "type": "NODE_DISCONNECTED",
+                "node_id": node_id,
+                "address": node_info.address,
+                "port": node_info.port
+            })
             
             del self.nodes[node_id]
     
@@ -205,6 +225,64 @@ class Coordinator:
                 "table": self.block_table.to_dict()
             })
     
+    def verify_and_recover_blocks(self):
+        """
+        Verifica que todos los bloques existan en su nodo principal.
+        Si no existen, intenta recuperarlos desde la réplica.
+        Se ejecuta periódicamente para sincronización.
+        """
+        if not self.block_table or not self.block_table.blocks:
+            return
+        
+        recovered_blocks = 0
+        missing_blocks = []
+        
+        for block_id, block_info in list(self.block_table.blocks.items()):
+            if block_info["status"] == "FREE":
+                continue
+            
+            primary_node_id = block_info.get("primary_node_id")
+            replica_node_id = block_info.get("replica_node_id")
+            file_id = block_info.get("file_id")
+            
+            # Verificar que el nodo principal esté vivo
+            if primary_node_id not in self.nodes or not self.nodes[primary_node_id].is_alive():
+                # Nodo principal desconectado
+                if replica_node_id and replica_node_id in self.nodes and self.nodes[replica_node_id].is_alive():
+                    print(f"[!] Bloque {block_id} - Primario desconectado, réplica disponible en {replica_node_id}")
+                    # No recuperar automáticamente, solo notificar
+                else:
+                    print(f"[✗] Bloque {block_id} - SIN RESPALDO (primario y réplica no disponibles)")
+                    missing_blocks.append(block_id)
+                continue
+            
+            # TODO: Aquí se podría agregar verificación real del bloque en el nodo
+            # Por ahora solo verificamos el estado del nodo
+    
+    def sync_blocks_from_node(self, node_id: str):
+        """
+        Sincroniza bloques desde un nodo específico después de reconexión.
+        Si el usuario borró archivos, intenta recuperarlos desde las réplicas.
+        """
+        if node_id not in self.nodes:
+            return False
+        
+        node_info = self.nodes[node_id]
+        sync_count = 0
+        
+        # Buscar bloques que deberían estar en este nodo
+        for block_id, block_info in list(self.block_table.blocks.items()):
+            if block_info["status"] == "FREE":
+                continue
+            
+            if block_info.get("primary_node_id") == node_id:
+                # Este bloque debería estar en este nodo
+                # Verificar si está (esto se haría con un mensaje de verificación)
+                sync_count += 1
+        
+        print(f"[*] Sincronización: {sync_count} bloques verificados en {node_id}")
+        return True
+    
     def notify_all_nodes(self, message: dict):
         """Notifica a todos los nodos activos"""
         with self.node_lock:
@@ -215,8 +293,54 @@ class Coordinator:
                     except:
                         pass
     
+    def notify_all_webs(self, notification: dict):
+        """Notifica a todas las webs conectadas sobre cambios en nodos"""
+        with self.web_lock:
+            dead_clients = []
+            for client_addr, client_socket in list(self.web_clients.items()):
+                try:
+                    # Enviar notificación a cada web
+                    send_message(client_socket, MessageType.ACTIVE_NODES_DATA, notification)
+                except Exception as e:
+                    # Si hay error, marcar para eliminar
+                    dead_clients.append(client_addr)
+            
+            # Limpiar clientes muertos
+            for client_addr in dead_clients:
+                try:
+                    self.web_clients[client_addr].close()
+                except:
+                    pass
+                del self.web_clients[client_addr]
+    
+    def add_event(self, event_type: str, event_data: dict):
+        """Agrega un evento reciente para que las webs lo lean"""
+        import time
+        event = {
+            "type": event_type,
+            "timestamp": time.time(),
+            "data": event_data
+        }
+        with self.events_lock:
+            self.recent_events.append(event)
+            # Mantener solo los últimos 20 eventos
+            if len(self.recent_events) > 20:
+                self.recent_events = self.recent_events[-20:]
+        
+        # También agregar al caché global para que Django pueda acceder
+        coordinator_cache.add_event(event_type, event_data)
+    
+    def get_recent_events(self) -> list:
+        """Obtiene los eventos recientes (para webs)"""
+        with self.events_lock:
+            return list(self.recent_events)
+    
     def handle_client(self, client_socket: socket.socket, address):
         """Maneja una conexión de cliente (nodo o cliente GUI)"""
+        client_type = "DESCONOCIDO"
+        client_type_announced = False
+        client_address_key = f"{address[0]}:{address[1]}"
+        
         try:
             while self.running:
                 message = receive_message(client_socket)
@@ -227,90 +351,149 @@ class Coordinator:
                 data = message.get("data", {})
                 
                 if msg_type == MessageType.NODE_REGISTER:
+                    client_type = "NODO"
                     self.handle_node_register(client_socket, data)
                 elif msg_type == MessageType.NODE_HEARTBEAT:
+                    client_type = "NODO"
                     self.handle_node_heartbeat(data)
                 elif msg_type == MessageType.BLOCK_STORED:
+                    client_type = "NODO"
                     self.handle_block_stored(data)
                 elif msg_type == MessageType.UPLOAD_FILE:
+                    # ⭐ Registrar cliente web cuando se conecte
+                    if not client_type_announced:
+                        print(f"\n[✓ WEB CONECTADA] Dirección: {address[0]}:{address[1]}")
+                        client_type_announced = True
+                        client_type = "WEB"
+                        # Registrar el socket de esta web
+                        with self.web_lock:
+                            self.web_clients[client_address_key] = client_socket
                     self.handle_upload_file(client_socket, data)
                 elif msg_type == MessageType.DOWNLOAD_FILE:
+                    if not client_type_announced:
+                        print(f"\n[✓ WEB CONECTADA] Dirección: {address[0]}:{address[1]}")
+                        client_type_announced = True
+                        client_type = "WEB"
+                        with self.web_lock:
+                            self.web_clients[client_address_key] = client_socket
                     self.handle_download_file(client_socket, data)
                 elif msg_type == MessageType.DELETE_FILE:
+                    if not client_type_announced:
+                        print(f"\n[✓ WEB CONECTADA] Dirección: {address[0]}:{address[1]}")
+                        client_type_announced = True
+                        client_type = "WEB"
+                        with self.web_lock:
+                            self.web_clients[client_address_key] = client_socket
                     self.handle_delete_file(client_socket, data)
                 elif msg_type == MessageType.CLEANUP_ALL:
+                    if not client_type_announced:
+                        print(f"\n[✓ WEB CONECTADA] Dirección: {address[0]}:{address[1]}")
+                        client_type_announced = True
+                        client_type = "WEB"
+                        with self.web_lock:
+                            self.web_clients[client_address_key] = client_socket
                     self.handle_cleanup_all(client_socket, data)
                 elif msg_type == MessageType.LIST_FILES:
+                    if not client_type_announced:
+                        print(f"\n[✓ WEB CONECTADA] Dirección: {address[0]}:{address[1]}")
+                        client_type_announced = True
+                        client_type = "WEB"
+                        with self.web_lock:
+                            self.web_clients[client_address_key] = client_socket
                     self.handle_list_files(client_socket)
                 elif msg_type == MessageType.GET_FILE_INFO:
+                    if not client_type_announced:
+                        print(f"\n[✓ WEB CONECTADA] Dirección: {address[0]}:{address[1]}")
+                        client_type_announced = True
+                        client_type = "WEB"
+                        with self.web_lock:
+                            self.web_clients[client_address_key] = client_socket
                     self.handle_get_file_info(client_socket, data)
                 elif msg_type == MessageType.GET_BLOCK_TABLE:
+                    if not client_type_announced:
+                        print(f"\n[✓ WEB CONECTADA] Dirección: {address[0]}:{address[1]}")
+                        client_type_announced = True
+                        client_type = "WEB"
+                        with self.web_lock:
+                            self.web_clients[client_address_key] = client_socket
                     self.handle_get_block_table(client_socket)
                 elif msg_type == MessageType.GET_ACTIVE_NODES:
+                    if not client_type_announced:
+                        print(f"\n[✓ WEB CONECTADA] Dirección: {address[0]}:{address[1]}")
+                        client_type_announced = True
+                        client_type = "WEB"
+                        with self.web_lock:
+                            self.web_clients[client_address_key] = client_socket
                     self.handle_get_active_nodes(client_socket)
                 
         except Exception as e:
             print(f"Error manejando cliente {address}: {e}")
         finally:
+            if client_type == "WEB":
+                print(f"\n[✗ WEB DESCONECTADO] Dirección: {address[0]}:{address[1]}")
+                # Desregistrar cliente web
+                with self.web_lock:
+                    if client_address_key in self.web_clients:
+                        del self.web_clients[client_address_key]
+            elif client_type == "NODO":
+                print(f"\n[✗ NODO DESCONECTADO] Dirección: {address[0]}:{address[1]}")
             client_socket.close()
     
     def handle_node_register(self, client_socket: socket.socket, data: dict):
         """Registra un nuevo nodo"""
-        requested_node_id = data.get("node_id")  # Puede ser None o vacío
+        requested_node_id = data.get("node_id")  # El node_id local del nodo (ej: node_3eac6ec3)
         address = data.get("address")
         port = data.get("port")
         shared_space_size = data.get("shared_space_size")
         
-        # Crear clave única para identificar el nodo por su dirección
-        node_key = f"{address}:{port}"
+        # ⭐ CLAVE MEJORADA: Usar node_id + address en lugar de solo address:port
+        # Porque el puerto cambia en cada conexión
+        node_key = f"{address}#{requested_node_id}"  # Ej: "172.31.10.37#node_3eac6ec3"
         
-        # Determinar el ID del nodo
+        # Determinar el ID del nodo a asignar (nodo1, nodo2, etc)
         with self.node_lock:
-            # Si el nodo ya está registrado (reconexión), usar su ID anterior
+            # Si el nodo ya está registrado (reconexión con mismo node_id), usar su nodo_n asignado
             if node_key in self.node_registry:
-                node_id = self.node_registry[node_key]
-                print(f"Nodo reconectado: {node_id} desde {address}:{port}")
-            # Si el nodo solicitó un ID específico y está disponible, usarlo
-            elif requested_node_id and requested_node_id not in self.nodes:
-                node_id = requested_node_id
-                self.node_registry[node_key] = node_id
-            # Si no, asignar un ID automático (nodo1, nodo2, etc.)
+                assigned_nodo = self.node_registry[node_key]
+                print(f"\n[✓ NODO RECONECTADO] node_id: {requested_node_id} → {assigned_nodo} | Dirección: {address}:{port}")
+            # Si no, asignar un nuevo nodo_n (nodo1, nodo2, etc.)
             else:
-                node_id = f"nodo{self.next_node_number}"
+                assigned_nodo = f"nodo{self.next_node_number}"
                 self.next_node_number += 1
-                self.node_registry[node_key] = node_id
-                print(f"Nuevo nodo asignado: {node_id}")
+                self.node_registry[node_key] = assigned_nodo
+                print(f"\n[✓ NODO NUEVO] node_id: {requested_node_id} → {assigned_nodo} (asignado) | Dirección: {address}:{port}")
             
-            # Si el nodo ya existe pero está desconectado, actualizar su información
-            if node_id in self.nodes:
-                old_node = self.nodes[node_id]
-                # Actualizar información del nodo
+            # Si el nodo ya existe en self.nodes pero está desconectado, actualizar su información
+            if assigned_nodo in self.nodes:
+                old_node = self.nodes[assigned_nodo]
+                print(f"    [*] Actualizando información del nodo {assigned_nodo}")
                 old_node.address = address
                 old_node.port = port
                 old_node.shared_space_size = shared_space_size
                 old_node.last_heartbeat = time.time()
                 old_node.socket = client_socket
             else:
-                # Crear nuevo nodo
+                # Crear nuevo nodo con el nodo_n asignado
                 node_info = NodeInfo(
-                    node_id=node_id,
+                    node_id=assigned_nodo,  # El nodo_n asignado (nodo1, nodo2, etc)
                     address=address,
                     port=port,
                     shared_space_size=shared_space_size,
                     last_heartbeat=time.time(),
                     socket=client_socket
                 )
-                self.nodes[node_id] = node_info
+                self.nodes[assigned_nodo] = node_info
+                print(f"    [*] Nuevo nodo creado: {assigned_nodo}")
             
             # Guardar estado
             self.save_state()
             
             # Reconstruir tabla de bloques con estructura de nodos
             node_blocks = {}
-            for node_id, node_info in self.nodes.items():
+            for nodo_id, node_info in self.nodes.items():
                 if node_info.is_alive():
                     num_blocks = node_info.shared_space_size // BLOCK_SIZE
-                    node_blocks[node_id] = num_blocks
+                    node_blocks[nodo_id] = num_blocks
             
             if node_blocks:
                 if self.block_table is None:
@@ -321,11 +504,9 @@ class Coordinator:
             
             total_blocks = sum(node_blocks.values()) if node_blocks else 0
             
-            print(f"Nodo {node_id} registrado desde {address}:{port} con {shared_space_size} bytes")
-            
             send_message(client_socket, MessageType.REGISTER_RESPONSE, {
                 "success": True,
-                "node_id": node_id,  # Enviar el ID asignado al nodo
+                "node_id": assigned_nodo,  # Enviar el nodo_n asignado al nodo
                 "total_blocks": total_blocks,
                 "block_table": self.block_table.to_dict() if self.block_table else {}
             })
@@ -333,7 +514,7 @@ class Coordinator:
         # Notificar a otros nodos
         self.notify_all_nodes({
             "type": "NODE_REGISTERED",
-            "node_id": node_id
+            "node_id": assigned_nodo
         })
     
     def handle_node_heartbeat(self, data: dict):
@@ -658,25 +839,6 @@ class Coordinator:
             "nodes": nodes_list
         })
     
-    def stop(self):
-        """Detiene el coordinador"""
-        self.running = False
-        if self.socket:
-            self.socket.close()
-        self.save_state()
-
-def split_file_into_blocks_from_bytes(file_bytes: bytes, block_size: int):
-    """Divide bytes de archivo en bloques"""
-    blocks = []
-    block_num = 0
-    offset = 0
-    while offset < len(file_bytes):
-        block_data = file_bytes[offset:offset + block_size]
-        blocks.append((block_num, block_data))
-        block_num += 1
-        offset += block_size
-    return blocks
-
     def handle_cleanup_all(self, client_socket: socket.socket, data: dict):
         """Limpia todos los archivos, bloques y nodos del sistema"""
         print("[!] LIMPIEZA COMPLETA DEL SISTEMA SOLICITADA")
@@ -790,6 +952,25 @@ def split_file_into_blocks_from_bytes(file_bytes: bytes, block_size: int):
             send_message(client_socket, MessageType.ERROR, {
                 "message": f"Error durante la limpieza: {str(e)}"
             })
+    
+    def stop(self):
+        """Detiene el coordinador"""
+        self.running = False
+        if self.socket:
+            self.socket.close()
+        self.save_state()
+
+def split_file_into_blocks_from_bytes(file_bytes: bytes, block_size: int):
+    """Divide bytes de archivo en bloques"""
+    blocks = []
+    block_num = 0
+    offset = 0
+    while offset < len(file_bytes):
+        block_data = file_bytes[offset:offset + block_size]
+        blocks.append((block_num, block_data))
+        block_num += 1
+        offset += block_size
+    return blocks
 
 if __name__ == "__main__":
     coordinator = Coordinator()

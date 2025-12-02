@@ -15,4 +15,5 @@ urlpatterns = [
     path('api/files/info/', views.get_file_info, name='get_file_info'),
     path('api/blocks/', views.get_block_table, name='get_block_table'),
     path('api/cleanup/', views.cleanup_all, name='cleanup_all'),
+    path('api/events/', views.get_recent_events, name='get_recent_events'),
 ]

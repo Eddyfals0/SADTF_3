@@ -5,6 +5,7 @@ import socket
 import base64
 import os
 import json
+import time
 from django.http import JsonResponse, HttpResponse, HttpResponseBadRequest
 from django.shortcuts import render
 from django.views.decorators.csrf import csrf_exempt
@@ -17,6 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 from config import COORDINATOR_HOST, COORDINATOR_PORT
 from common.protocol import MessageType, receive_message, send_message
 from common.utils import format_size, combine_blocks_into_file
+from coordinator.cache import coordinator_cache
 
 def get_default_coordinator_host():
     """Obtiene la IP del coordinador desde el archivo de configuración o config.py"""
@@ -293,3 +295,29 @@ def cleanup_all(request):
         return JsonResponse({"error": str(e)}, status=500)
     finally:
         sock.close()
+
+@csrf_exempt
+@require_http_methods(["GET"])
+def get_recent_events(request):
+    """Obtiene los eventos recientes (desconexiones de nodos, etc)"""
+    try:
+        # Obtener timestamp desde request si existe
+        timestamp_str = request.GET.get('since', '0')
+        try:
+            timestamp = float(timestamp_str)
+        except:
+            timestamp = 0
+        
+        # Obtener eventos desde el caché
+        if timestamp > 0:
+            events = coordinator_cache.get_events_since(timestamp)
+        else:
+            events = coordinator_cache.get_recent_events()
+        
+        return JsonResponse({
+            "events": events,
+            "count": len(events),
+            "timestamp": time.time()
+        })
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)

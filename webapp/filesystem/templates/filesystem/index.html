@@ -216,6 +216,8 @@
         let nodesData = [];
         let blockTableData = null;
         let refreshInterval = null;
+        let lastEventTimestamp = 0;  // Para monitoreo de eventos
+        let needsRefresh = false;    // Bandera para actualizar tabla de nodos
 
         // --- FUNCIONES DE INICIALIZACIÓN ---
         function init() {
@@ -291,8 +293,39 @@
             }
         }
 
+        async function checkRecentEvents() {
+            """Verifica si hay eventos recientes (desconexiones de nodos, etc)"""
+            try {
+                const response = await fetch('/api/events/?since=' + (lastEventTimestamp || 0));
+                const data = await response.json();
+                
+                if (data.events && data.events.length > 0) {
+                    // Procesar eventos
+                    for (const event of data.events) {
+                        if (event.type === 'NODE_DISCONNECTED') {
+                            console.log(`[!] Nodo desconectado: ${event.data.node_id}`);
+                            // Marcar que necesitamos recargar nodos
+                            needsRefresh = true;
+                        }
+                    }
+                    
+                    // Si hubo eventos importantes, actualizar la tabla
+                    if (needsRefresh) {
+                        await fetchNodes();
+                        needsRefresh = false;
+                    }
+                    
+                    lastEventTimestamp = data.timestamp;
+                }
+            } catch (error) {
+                // Silenciar errores de eventos
+            }
+        }
+
         async function refreshAll() {
             await Promise.all([fetchNodes(), fetchFiles(), fetchBlockTable()]);
+            // Verificar eventos también
+            await checkRecentEvents();
         }
 
         // --- RENDERIZADO DE UI ---
@@ -308,12 +341,26 @@
                 return;
             }
 
+            // Calcular uso real desde blockTableData
+            const nodeBlockUsage = {};
+            if (blockTableData && blockTableData.blocks) {
+                blockTableData.blocks.forEach(block => {
+                    if (block.status !== 'FREE' && block.primary_node_id) {
+                        if (!nodeBlockUsage[block.primary_node_id]) {
+                            nodeBlockUsage[block.primary_node_id] = 0;
+                        }
+                        nodeBlockUsage[block.primary_node_id]++;
+                    }
+                });
+            }
+
             nodesData.forEach(node => {
                 if (node.is_alive) {
                     const capacityMB = Math.round(node.shared_space_size / (1024 * 1024));
                     totalCap += capacityMB;
-                    // Estimación de uso (en producción calcularías esto)
-                    totalUsed += Math.round(capacityMB * 0.3); // Simulación
+                    // Uso real: cantidad de bloques usados en este nodo (cada bloque = 1MB)
+                    const usedMB = nodeBlockUsage[node.node_id] || 0;
+                    totalUsed += usedMB;
                 }
 
                 const row = `
