@@ -1,0 +1,18 @@
+# No se requieren dependencias externas
+# El proyecto usa solo librerías estándar de Python:
+# - socket (comunicación de red)
+# - threading (hilos)
+# - tkinter (interfaz gráfica - viene con Python)
+# - json (serialización)
+# - base64 (codificación)
+# - os, pathlib (sistema de archivos)
+# - hashlib (hashes)
+# - datetime (fechas)
+# - dataclasses (estructuras de datos)
+# - enum (enumeraciones)
+
+# Si tkinter no está disponible, instalar:
+# Ubuntu/Debian: sudo apt-get install python3-tk
+# Windows: tkinter viene incluido con Python
+# macOS: tkinter viene incluido con Python
+
